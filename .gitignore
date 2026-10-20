@@ -7,3 +7,4 @@ target/
 .env
 *.local.yml
 deploy/k8s/secret.yaml
+.claude/settings.local.json

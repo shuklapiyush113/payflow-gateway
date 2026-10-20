@@ -1,6 +1,6 @@
 # Instructions for AI coding assistants
 
-- Read [README.md](README.md) (status and roadmap) and [docs/architecture.md](docs/architecture.md)
+- Read [README.md](../README.md) (status and roadmap) and [docs/architecture.md](../docs/architecture.md)
   (decisions) before changing code. Record new design decisions in architecture.md.
 - Java 21, Spring Boot 4.1 (Jackson 3: `tools.jackson.*`), Testcontainers 2.
 - Checks before finishing: `./mvnw verify` (needs Docker). With Colima on macOS set
