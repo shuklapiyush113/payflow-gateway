@@ -35,6 +35,9 @@ management:
         enabled: true
 
 payflow:
+  admin:
+    # Bearer token for /admin/** (issuing and revoking API keys). Empty disables the admin API.
+    token: ${ADMIN_TOKEN:}
   events:
     # log | kafka
     publisher: ${EVENT_PUBLISHER:log}

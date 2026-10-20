@@ -34,6 +34,8 @@ import dev.payflow.payment.domain.PaymentMethod;
 import dev.payflow.payment.domain.PaymentRepository;
 import dev.payflow.payment.domain.PaymentStatus;
 import dev.payflow.payment.ledger.LedgerEntryRepository;
+import dev.payflow.payment.merchant.MerchantService;
+import dev.payflow.payment.merchant.MerchantService.NewMerchant;
 import dev.payflow.payment.outbox.OutboxEvent;
 import dev.payflow.payment.outbox.OutboxRepository;
 import dev.payflow.payment.processor.MockBankConnector;
@@ -66,11 +68,18 @@ class ReconciliationIntegrationTest {
     @Autowired
     MockBankConnector bank;
 
+    @Autowired
+    MerchantService merchants;
+
+    /** A fresh merchant and API key per test keeps tests independent without truncating tables. */
     String merchant;
+    String auth;
 
     @BeforeEach
     void newMerchant() {
-        merchant = "m_" + UUID.randomUUID();
+        NewMerchant created = merchants.createMerchant("test merchant");
+        merchant = created.merchantId();
+        auth = "Bearer " + created.apiKey().key();
     }
 
     @Test
@@ -190,7 +199,7 @@ class ReconciliationIntegrationTest {
         Map<String, Object> request = Map.of("amountMinor", amount, "currency", "INR", "method", method,
                 "source", source, "capture", capture);
         return mvc.perform(post("/v1/payments")
-                .header("X-Merchant-Id", merchant)
+                .header("Authorization", auth)
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(request)));

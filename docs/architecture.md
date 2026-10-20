@@ -15,6 +15,8 @@ is likely to ask about this project.
 | `ledger` | Double-entry journals | Append-only log |
 | `outbox` | `OutboxWriter`, `OutboxRelay`, `EventPublisher` port | Transactional outbox, adapter (log / Kafka) |
 | `idempotency` | Key claim and replay | Idempotent receiver |
+| `merchant` | Merchants and API keys | Repository with `JdbcClient` |
+| `security` | API-key filter, security chain | Servlet filter, stateless authentication |
 | `application` | Use cases, transaction boundaries, `PaymentReconciler` | Application service, scheduled job |
 | `api` | Controllers, request/response records, error mapping | DTOs separate from the domain |
 
@@ -142,9 +144,36 @@ in the same transaction as the change, and `OutboxRelay` publishes it afterwards
 `EventPublisher` is a port: `LoggingEventPublisher` for local runs, `KafkaEventPublisher` in
 production. A Google Pub/Sub adapter would be one more class.
 
+## API keys
+
+Merchants call the API with `Authorization: Bearer sk_…`. `ApiKeyAuthenticationFilter` hashes the key,
+looks the hash up in `api_keys`, and puts an `AuthenticatedMerchant` principal in the security context;
+controllers take the merchant id from it. Until this step the service trusted an `X-Merchant-Id`
+header, so any caller could act as any merchant.
+
+- **Authenticate in the service, not only at a gateway.** A gateway that checks the key and forwards a
+  trusted header is common, but then everything rests on nobody reaching the service directly. Checking
+  the key in the service holds even if the network is misconfigured, and it saves a gateway hop on a
+  small VM. The gateway planned for rate limiting can still reject bad keys early.
+- **Only a SHA-256 hash is stored.** A leaked table yields no usable keys. Keys are 32 random bytes,
+  so a fast hash is enough; bcrypt exists to slow down guessing of low-entropy passwords, and would add
+  around 100 ms to every call. Lookup is by hash on a unique index, so there is no string comparison
+  whose timing could leak anything.
+- **Rotation without downtime:** a merchant can hold several active keys. Issue a new one, deploy it,
+  then revoke the old one. Revocation takes effect on the next request, since there is no cache.
+- **Admin API:** `/admin/**` needs a separate admin token (at least 32 characters, from the k8s
+  Secret; the service refuses to start with a shorter one), compared in constant time. The ingress only
+  routes `/v1`, so the admin API is reachable only through `kubectl port-forward`. The admin token
+  cannot call `/v1` and merchant keys cannot call `/admin` (`403`).
+- **Cost:** one indexed lookup per request. If it shows up in the load test, a short-lived cache
+  (Redis, which step 2 adds for rate limiting) would remove it, at the price of revocation taking up to
+  the cache TTL.
+- Payments created before this step belong to merchant ids without a `merchants` row, so there is no
+  foreign key from `payments` to `merchants` yet.
+
 ## Security notes
 
 - Card numbers are never accepted, only vault tokens (`tok_…`). Sources are masked before they are stored.
 - Merchant isolation: every query is filtered by merchant id, and a payment id from another merchant returns `404`.
-- `X-Merchant-Id` is trusted for now; in step 2 the gateway sets it from an authenticated API key and strips any client-supplied value.
+- The merchant id comes only from the API key; an `X-Merchant-Id` header is ignored (see API keys).
 - The container runs as a non-root user with a read-only root filesystem.

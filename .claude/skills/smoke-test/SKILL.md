@@ -7,21 +7,29 @@ description: Start the local Docker Compose stack and drive the payments API end
 
 1. `docker compose up -d --build` from the repo root, then wait until
    `curl -sf localhost:8080/actuator/health` returns `UP`.
-2. Create a captured payment with a fresh idempotency key and keep the `id`:
+2. Onboard a fresh merchant with the admin token from `docker-compose.yml` and keep its key:
+
+   ```bash
+   AUTH="Authorization: Bearer $(curl -s localhost:8080/admin/merchants \
+     -H 'Authorization: Bearer local-dev-admin-token-0123456789abcdef' -H 'Content-Type: application/json' \
+     -d '{"name":"smoke"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["apiKey"]["key"])')"
+   ```
+
+   Then create a captured payment with a fresh idempotency key and keep the `id`:
 
    ```bash
    KEY=smoke-$(date +%s)
    curl -s -i localhost:8080/v1/payments \
-     -H 'X-Merchant-Id: m_smoke' -H "Idempotency-Key: $KEY" -H 'Content-Type: application/json' \
+     -H "$AUTH" -H "Idempotency-Key: $KEY" -H 'Content-Type: application/json' \
      -d '{"amountMinor":100000,"currency":"INR","method":"UPI","source":"alice@okbank","capture":true}'
    ```
 
    Expect `201` and `"status":"CAPTURED"`.
 3. Send the identical request again. Expect the same `id` and header `Idempotent-Replayed: true`.
 4. Refund part of it:
-   `curl -s localhost:8080/v1/payments/<id>/refunds -H 'X-Merchant-Id: m_smoke' -H "Idempotency-Key: $KEY-r1" -H 'Content-Type: application/json' -d '{"amountMinor":30000}'`.
+   `curl -s localhost:8080/v1/payments/<id>/refunds -H "$AUTH" -H "Idempotency-Key: $KEY-r1" -H 'Content-Type: application/json' -d '{"amountMinor":30000}'`.
    Expect `"status":"PARTIALLY_REFUNDED"` and `refundedMinor` 30000.
-5. `curl -s localhost:8080/v1/balances -H 'X-Merchant-Id: m_smoke'`: the balances must sum to zero
+5. `curl -s localhost:8080/v1/balances -H "$AUTH"`: the balances must sum to zero
    (double entry), and the fee must match `payflow.ledger.fee-basis-points` in `application.yml`.
 6. Check events reached Kafka:
    `docker compose exec redpanda rpk topic consume payments.events -n 20 -f '%k %h\n'`.
