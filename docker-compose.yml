@@ -31,7 +31,8 @@ services:
     image: redpandadata/redpanda:v26.2.3
     depends_on:
       redpanda: {condition: service_healthy}
-    entrypoint: ["rpk", "topic", "create", "payments.events", "-p", "6", "-X", "brokers=redpanda:9092"]
+    # Succeeds when the topic already exists, so `up` can be run again.
+    entrypoint: ["/bin/sh", "-c", "rpk topic create payments.events -p 6 -X brokers=redpanda:9092; rpk topic describe payments.events -X brokers=redpanda:9092 > /dev/null"]
     restart: "no"
 
   console:
