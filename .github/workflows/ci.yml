@@ -42,7 +42,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: owner
+      - name: Lowercase repository owner
+        id: owner
         run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       # The Oracle Always Free VM is ARM64, so build both architectures.
       - uses: docker/build-push-action@v6
