@@ -15,5 +15,7 @@ description: Close out a PayFlow roadmap step or feature - verify, update README
    measured next to them.
 6. Check `git status` for files that must not be committed (`deploy/k8s/secret.yaml`, `.env`,
    anything with real credentials).
-7. Commit with a conventional message (`feat:`, `fix:`, `chore:`, `docs:`). Push only when asked;
-   after a push, watch the CI run with `gh run watch` and report the result.
+7. Work on a feature branch, never `main`. Commit with a conventional message (`feat:`, `fix:`,
+   `chore:`, `docs:`) and no AI co-author trailer.
+8. Push the branch and open a pull request with `gh pr create` (why, what, deploy notes, how it was
+   tested; no "generated with" footer). Watch its CI run with `gh run watch` and report the result.
