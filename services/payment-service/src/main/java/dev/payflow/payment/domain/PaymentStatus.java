@@ -9,13 +9,18 @@ import java.util.Set;
  *
  * <pre>
  * CREATED ──► AUTHORIZED ──► CAPTURED ──► PARTIALLY_REFUNDED ──► REFUNDED
- *    │             │             └───────────────────────────────────▲
- *    ├──► DECLINED └──► VOIDED
- *    └──► FAILED
+ *  │  │             │             └───────────────────────────────────▲
+ *  │  ├──► DECLINED └──► VOIDED
+ *  │  └──► FAILED
+ *  └──► PENDING ──► AUTHORIZED | DECLINED | FAILED
  * </pre>
+ *
+ * {@code PENDING} means the bank call timed out and the outcome is unknown; the reconciler asks the
+ * bank and settles it. A payment left in {@code CREATED} by a crash is settled the same way.
  */
 public enum PaymentStatus {
     CREATED,
+    PENDING,
     AUTHORIZED,
     CAPTURED,
     PARTIALLY_REFUNDED,
@@ -27,7 +32,8 @@ public enum PaymentStatus {
     private Set<PaymentStatus> allowedNext;
 
     static {
-        CREATED.allowedNext = EnumSet.of(AUTHORIZED, DECLINED, FAILED);
+        CREATED.allowedNext = EnumSet.of(PENDING, AUTHORIZED, DECLINED, FAILED);
+        PENDING.allowedNext = EnumSet.of(AUTHORIZED, DECLINED, FAILED);
         AUTHORIZED.allowedNext = EnumSet.of(CAPTURED, VOIDED);
         CAPTURED.allowedNext = EnumSet.of(PARTIALLY_REFUNDED, REFUNDED);
         PARTIALLY_REFUNDED.allowedNext = EnumSet.of(PARTIALLY_REFUNDED, REFUNDED);
@@ -39,6 +45,11 @@ public enum PaymentStatus {
 
     public boolean canTransitionTo(PaymentStatus next) {
         return allowedNext.contains(next);
+    }
+
+    /** True while the bank's answer has not been recorded; the reconciler looks for these. */
+    public boolean awaitsBankOutcome() {
+        return this == CREATED || this == PENDING;
     }
 
     public boolean isTerminal() {

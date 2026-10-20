@@ -1,5 +1,6 @@
 package dev.payflow.payment.processor;
 
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Component;
@@ -37,7 +38,7 @@ public class WalletProcessor implements PaymentMethodProcessor {
     }
 
     @Override
-    public BankResponse authorize(String source, Money amount) {
-        return bank.authorize(method(), source, amount);
+    public BankResponse authorize(UUID reference, String source, Money amount) {
+        return bank.authorize(reference, method(), source, amount);
     }
 }

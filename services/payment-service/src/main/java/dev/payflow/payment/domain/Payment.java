@@ -55,6 +55,13 @@ public class Payment {
 
     private String description;
 
+    /** Client's Idempotency-Key; unique per merchant, so a retry can never create a second payment. */
+    private String idempotencyKey;
+
+    /** Capture as soon as the bank approves; kept so the reconciler can finish what the request asked. */
+    @Column(nullable = false)
+    private boolean autoCapture;
+
     @Version
     private long version;
 
@@ -68,24 +75,32 @@ public class Payment {
         // for JPA
     }
 
-    public Payment(UUID id, String merchantId, Money amount, PaymentMethod method, String sourceMasked,
-                   String description, Instant now) {
+    public Payment(UUID id, String merchantId, String idempotencyKey, Money amount, PaymentMethod method,
+                   String sourceMasked, boolean autoCapture, String description, Instant now) {
         if (amount.minor() == 0) {
             throw new IllegalArgumentException("amount must be positive");
         }
         this.id = id;
         this.merchantId = merchantId;
+        this.idempotencyKey = idempotencyKey;
         this.amountMinor = amount.minor();
         this.currency = amount.currency();
         this.method = method;
         this.sourceMasked = sourceMasked;
+        this.autoCapture = autoCapture;
         this.description = description;
         this.status = PaymentStatus.CREATED;
         this.createdAt = now;
         this.updatedAt = now;
     }
 
-    public void authorize(double riskScore, String bankReference, Instant now) {
+    /** The bank call timed out; the bank may or may not have approved. */
+    public void markPending(Instant now) {
+        transitionTo(PaymentStatus.PENDING, now);
+    }
+
+    /** {@code riskScore} is null when the reconciler records an approval the request never saw. */
+    public void authorize(Double riskScore, String bankReference, Instant now) {
         this.riskScore = riskScore;
         this.bankReference = bankReference;
         transitionTo(PaymentStatus.AUTHORIZED, now);
@@ -171,6 +186,14 @@ public class Payment {
 
     public String getFailureReason() {
         return failureReason;
+    }
+
+    public String getIdempotencyKey() {
+        return idempotencyKey;
+    }
+
+    public boolean isAutoCapture() {
+        return autoCapture;
     }
 
     public String getDescription() {

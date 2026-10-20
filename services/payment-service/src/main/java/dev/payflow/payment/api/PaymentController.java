@@ -55,8 +55,10 @@ public class PaymentController {
                                                   @RequestHeader(IDEMPOTENCY_KEY) @Size(min = 8, max = 255) String key,
                                                   @Valid @RequestBody CreatePaymentRequest request) {
         var result = idempotency.execute(merchantId, key, "create", request, PaymentResponse.class,
-                () -> PaymentResponse.from(payments.create(merchantId, request.toCommand())));
-        return respond(HttpStatus.CREATED, result);
+                () -> PaymentResponse.from(payments.create(merchantId, key, request.toCommand())));
+        // 202 while the bank's answer is unknown; the client polls the Location or waits for the webhook.
+        return respond(result.response().status().awaitsBankOutcome() ? HttpStatus.ACCEPTED : HttpStatus.CREATED,
+                result);
     }
 
     @PostMapping("/payments/{id}/capture")
@@ -100,7 +102,7 @@ public class PaymentController {
     private static ResponseEntity<PaymentResponse> respond(HttpStatus status,
                                                            IdempotencyService.Result<PaymentResponse> result) {
         var builder = ResponseEntity.status(status).header("Idempotent-Replayed", String.valueOf(result.replayed()));
-        if (status == HttpStatus.CREATED) {
+        if (status == HttpStatus.CREATED || status == HttpStatus.ACCEPTED) {
             builder.location(URI.create("/v1/payments/" + result.response().id()));
         }
         return builder.body(result.response());
