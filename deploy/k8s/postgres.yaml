@@ -1,0 +1,53 @@
+# Single-node Postgres on the k3s local-path volume. Swap for Neon/Supabase by pointing
+# DB_URL in the secret at the managed instance and removing this file from kustomization.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: payflow
+spec:
+  selector: {app: postgres}
+  ports: [{port: 5432}]
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: payflow
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - {name: POSTGRES_DB, value: payflow}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: payflow-secrets, key: DB_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: payflow-secrets, key: DB_PASSWORD}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", "payflow"]}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests: {storage: 10Gi}

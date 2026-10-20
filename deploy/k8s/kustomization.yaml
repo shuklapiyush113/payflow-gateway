@@ -1,0 +1,12 @@
+# kubectl apply -k deploy/k8s   (create the secret first, see secret.example.yaml)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redpanda.yaml
+  - payment-service.yaml
+images:
+  # Replace OWNER with your GitHub user or org (lower case); CI pushes this image.
+  - name: ghcr.io/OWNER/payflow-payment-service
+    newTag: latest
