@@ -15,7 +15,7 @@ is likely to ask about this project.
 | `ledger` | Double-entry journals | Append-only log |
 | `outbox` | `OutboxWriter`, `OutboxRelay`, `EventPublisher` port | Transactional outbox, adapter (log / Kafka) |
 | `idempotency` | Key claim and replay | Idempotent receiver |
-| `application` | Use cases and transaction boundaries | Application service |
+| `application` | Use cases, transaction boundaries, `PaymentReconciler` | Application service, scheduled job |
 | `api` | Controllers, request/response records, error mapping | DTOs separate from the domain |
 
 The JPA annotations live on the domain classes. A pure hexagonal design would map separate
@@ -44,10 +44,17 @@ Clients retry on timeouts; without protection a retry charges twice.
   taken over after `lock-timeout` (60 s).
 - Keys expire after 24 hours (scheduled purge).
 
-Trade-off: the stored response is written after the payment transaction commits. A crash in between
-leaves a completed payment with an `IN_PROGRESS` key; after the lock timeout a retry would run the
-create again. Closing that gap fully means storing the response in the same transaction as the
-payment, which couples the two modules. The reconciliation job in step 2 covers it.
+The stored response is written after the payment transaction commits, so a crash in between leaves
+a completed payment with an `IN_PROGRESS` key, and after the lock timeout a retry runs the create
+again. To stop that from charging twice, the payment row also stores the idempotency key, unique per
+merchant. The re-run finds the existing payment and returns it; if two instances race, the unique
+constraint rejects the second insert. Storing the whole response in the payment transaction would
+also work, but it would tie the idempotency module to every use case.
+
+Remaining gap: refunds are not records of their own yet, so the same crash during a refund lets a
+retry refund again (still capped at the captured amount). Captures and voids are safe, because a
+repeat fails the state machine with `409`. Refunds get their own table, and the key with it, when
+settlement needs them.
 
 ## Transaction boundaries and the bank call
 
@@ -62,8 +69,40 @@ Holding a DB transaction open across a network call ties up a connection and row
 as the bank takes, which exhausts the pool under load. Persisting `CREATED` first means a crash
 during the bank call leaves a record for reconciliation instead of a charge with no trace.
 
-A bank timeout is treated as `FAILED` today. In reality the outcome is unknown (the bank may have
-approved), so step 2 adds a reconciliation job that queries the bank for payments in that state.
+A bank timeout is not a failure: the bank may have approved. Such payments go to `PENDING` and are
+settled by reconciliation (next section).
+
+## Reconciliation
+
+Two things leave a payment without a recorded bank answer: a timeout (`PENDING`), or a crash between
+saving the payment and recording the answer (`CREATED`). `PaymentReconciler` runs every 30 s, finds
+such payments older than `stale-after` (2 min), and asks the bank by reference:
+
+| Bank says | Result |
+|---|---|
+| Approved | `AUTHORIZED`, then `CAPTURED` with its ledger journal if the request asked for capture (`auto_capture` is stored for this) |
+| Declined | `DECLINED` |
+| No record | `FAILED` (`not_received_by_bank`): nothing was charged |
+| Unreachable | Left alone; tried again when the lease runs out; logged as an error after 10 attempts |
+
+- **The payment id is the bank reference.** The bank dedupes on it, and lookups use it. Without a
+  reference we chose, a lost answer could never be matched to a bank record.
+- **Several replicas:** one `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING` claims
+  a batch and sets `next_reconcile_at` (a lease). The bank lookup then runs outside any transaction,
+  and the lease keeps other replicas from asking about the same payment. The final update goes through
+  the normal optimistic-locking path, so a reconciler racing the original request cannot record
+  twice. A test runs four reconcilers in parallel over ten payments and checks one journal each.
+- **API:** a create that ends `PENDING` returns `202` with a `Location`; the client polls it (and will
+  get a webhook later in step 2). An idempotent replay returns the stored `PENDING` response, as
+  Stripe does; the current state is on the payment.
+- **Trade-off:** `stale-after` must be longer than the bank call timeout. Otherwise the job could see
+  "no record" for a request still in flight and fail a payment the bank then approves. If that
+  happens anyway, the authorization is never captured and lapses at the bank, so the customer is not
+  charged. Production would also void it explicitly.
+- **Not covered:** the mock bank keeps outcomes in memory, so after a restart it has "no record" of
+  older requests. A real bank's lookup API does not have this limit.
+- Interview angle: this is the same reasoning as payment-provider "requery" APIs (UPI transaction
+  status checks, card network inquiries): never turn an unknown into a failure without asking.
 
 ## Concurrency
 

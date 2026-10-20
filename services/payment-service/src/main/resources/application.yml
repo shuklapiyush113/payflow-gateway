@@ -43,6 +43,13 @@ payflow:
     poll-interval: 1s
     batch-size: 100
     max-attempts: 10
+  reconciliation:
+    interval: 30s
+    # Must exceed the bank call timeout, or an in-flight request could be marked failed.
+    stale-after: 2m
+    retry-after: 1m
+    batch-size: 50
+    alert-after-attempts: 10
   idempotency:
     lock-timeout: 60s
     retention: 24h

@@ -1,9 +1,11 @@
 package dev.payflow.payment.application;
 
 import java.time.Clock;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -16,7 +18,9 @@ import dev.payflow.payment.domain.PaymentRepository;
 import dev.payflow.payment.ledger.LedgerService;
 import dev.payflow.payment.outbox.OutboxWriter;
 import dev.payflow.payment.outbox.PaymentEvent;
+import dev.payflow.payment.processor.BankConnector;
 import dev.payflow.payment.processor.BankResponse;
+import dev.payflow.payment.processor.BankTimeoutException;
 import dev.payflow.payment.processor.BankUnavailableException;
 import dev.payflow.payment.processor.PaymentMethodProcessor;
 import dev.payflow.payment.processor.ProcessorRegistry;
@@ -33,17 +37,19 @@ public class PaymentService {
 
     private final PaymentRepository payments;
     private final ProcessorRegistry processors;
+    private final BankConnector bankConnector;
     private final RiskScorer riskScorer;
     private final LedgerService ledger;
     private final OutboxWriter outbox;
     private final TransactionTemplate tx;
     private final Clock clock;
 
-    public PaymentService(PaymentRepository payments, ProcessorRegistry processors, RiskScorer riskScorer,
-                          LedgerService ledger, OutboxWriter outbox, PlatformTransactionManager txManager,
-                          Clock clock) {
+    public PaymentService(PaymentRepository payments, ProcessorRegistry processors, BankConnector bankConnector,
+                          RiskScorer riskScorer, LedgerService ledger, OutboxWriter outbox,
+                          PlatformTransactionManager txManager, Clock clock) {
         this.payments = payments;
         this.processors = processors;
+        this.bankConnector = bankConnector;
         this.riskScorer = riskScorer;
         this.ledger = ledger;
         this.outbox = outbox;
@@ -51,14 +57,31 @@ public class PaymentService {
         this.clock = clock;
     }
 
-    public Payment create(String merchantId, CreatePaymentCommand command) {
+    /**
+     * Creates and authorizes a payment. {@code idempotencyKey} is stored on the payment with a unique
+     * constraint: if a crash lost the stored idempotent response, the retry finds this payment here
+     * instead of charging again.
+     */
+    public Payment create(String merchantId, String idempotencyKey, CreatePaymentCommand command) {
         PaymentMethodProcessor processor = processors.forMethod(command.method());
         processor.validateSource(command.source());
         Money amount = Money.of(command.amountMinor(), command.currency());
 
+        Optional<Payment> existing = payments.findByMerchantIdAndIdempotencyKey(merchantId, idempotencyKey);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+
         // 1. Persist first, so a crash during the bank call leaves a CREATED record to reconcile.
-        Payment created = tx.execute(status -> payments.save(new Payment(UUID.randomUUID(), merchantId, amount,
-                command.method(), processor.mask(command.source()), command.description(), clock.instant())));
+        Payment created;
+        try {
+            created = tx.execute(status -> payments.save(new Payment(UUID.randomUUID(), merchantId, idempotencyKey,
+                    amount, command.method(), processor.mask(command.source()), command.capture(),
+                    command.description(), clock.instant())));
+        } catch (DataIntegrityViolationException e) {
+            // Another instance took over the same key and inserted first.
+            return payments.findByMerchantIdAndIdempotencyKey(merchantId, idempotencyKey).orElseThrow(() -> e);
+        }
         UUID id = created.getId();
 
         // 2. Fraud check.
@@ -73,26 +96,43 @@ public class PaymentService {
         // 3. Authorize with the bank, outside any transaction.
         BankResponse bank;
         try {
-            bank = processor.authorize(command.source(), amount);
+            bank = processor.authorize(id, command.source(), amount);
         } catch (BankUnavailableException e) {
             return update(id, payment -> {
                 payment.fail("bank_unavailable", clock.instant());
                 outbox.append(PaymentEvent.of("payment.failed", payment, clock.instant()));
             });
+        } catch (BankTimeoutException e) {
+            // The bank may have approved; failing the payment here could lose a real charge.
+            return update(id, payment -> {
+                payment.markPending(clock.instant());
+                outbox.append(PaymentEvent.of("payment.pending", payment, clock.instant()));
+            });
         }
 
         // 4. Record the outcome, and capture straight away if the merchant asked for it.
-        return update(id, payment -> {
-            if (!bank.approved()) {
-                payment.decline(bank.declineReason(), risk.score(), clock.instant());
-                outbox.append(PaymentEvent.of("payment.declined", payment, clock.instant()));
+        return update(id, payment -> recordBankResponse(payment, bank, risk.score()));
+    }
+
+    /**
+     * Settles a payment whose bank outcome was never recorded (bank timeout, or a crash mid-request)
+     * by asking the bank. Called by {@link PaymentReconciler}; the bank lookup runs outside any
+     * transaction. Throws {@link BankUnavailableException} if the bank cannot be reached; the
+     * reconciler then tries again later.
+     */
+    public Payment reconcile(UUID paymentId) {
+        Optional<BankResponse> bank = bankConnector.lookup(paymentId);
+        return update(paymentId, payment -> {
+            if (!payment.getStatus().awaitsBankOutcome()) {
+                return; // settled by the original request or another reconciler in the meantime
+            }
+            if (bank.isEmpty()) {
+                // The bank never got the request, so nothing was charged.
+                payment.fail("not_received_by_bank", clock.instant());
+                outbox.append(PaymentEvent.of("payment.failed", payment, clock.instant()));
                 return;
             }
-            payment.authorize(risk.score(), bank.bankReference(), clock.instant());
-            outbox.append(PaymentEvent.of("payment.authorized", payment, clock.instant()));
-            if (command.capture()) {
-                captureInTransaction(payment);
-            }
+            recordBankResponse(payment, bank.get(), payment.getRiskScore());
         });
     }
 
@@ -119,6 +159,19 @@ public class PaymentService {
     public Payment get(String merchantId, UUID paymentId) {
         return payments.findByIdAndMerchantId(paymentId, merchantId)
                 .orElseThrow(() -> new PaymentNotFoundException(paymentId));
+    }
+
+    private void recordBankResponse(Payment payment, BankResponse bank, Double riskScore) {
+        if (!bank.approved()) {
+            payment.decline(bank.declineReason(), riskScore, clock.instant());
+            outbox.append(PaymentEvent.of("payment.declined", payment, clock.instant()));
+            return;
+        }
+        payment.authorize(riskScore, bank.bankReference(), clock.instant());
+        outbox.append(PaymentEvent.of("payment.authorized", payment, clock.instant()));
+        if (payment.isAutoCapture()) {
+            captureInTransaction(payment);
+        }
     }
 
     private void captureInTransaction(Payment payment) {

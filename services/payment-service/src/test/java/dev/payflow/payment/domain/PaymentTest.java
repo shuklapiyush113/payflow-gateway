@@ -15,8 +15,8 @@ class PaymentTest {
     private static final Instant NOW = Instant.parse("2026-10-21T10:00:00Z");
 
     private static Payment newPayment(long amount) {
-        return new Payment(UUID.randomUUID(), "m_1", Money.of(amount, "INR"), PaymentMethod.CARD,
-                "tok_****4242", null, NOW);
+        return new Payment(UUID.randomUUID(), "m_1", "idem_1", Money.of(amount, "INR"), PaymentMethod.CARD,
+                "tok_****4242", false, null, NOW);
     }
 
     private static Payment captured(long amount) {
@@ -77,6 +77,29 @@ class PaymentTest {
         Payment payment = captured(10_000);
         assertThatThrownBy(() -> payment.refund(Money.of(100, "USD"), NOW))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void pendingPaymentIsSettledByTheBanksAnswer() {
+        Payment approved = newPayment(10_000);
+        approved.markPending(NOW);
+        assertThat(approved.getStatus().awaitsBankOutcome()).isTrue();
+        approved.authorize(null, "bank_1", NOW);
+        assertThat(approved.getStatus()).isEqualTo(PaymentStatus.AUTHORIZED);
+        assertThat(approved.getStatus().awaitsBankOutcome()).isFalse();
+
+        Payment lost = newPayment(10_000);
+        lost.markPending(NOW);
+        lost.fail("not_received_by_bank", NOW);
+        assertThat(lost.getStatus()).isEqualTo(PaymentStatus.FAILED);
+    }
+
+    @Test
+    void pendingCannotBeCapturedOrMarkedPendingAgain() {
+        Payment payment = newPayment(10_000);
+        payment.markPending(NOW);
+        assertThatThrownBy(() -> payment.capture(NOW)).isInstanceOf(InvalidStateTransitionException.class);
+        assertThatThrownBy(() -> payment.markPending(NOW)).isInstanceOf(InvalidStateTransitionException.class);
     }
 
     @ParameterizedTest

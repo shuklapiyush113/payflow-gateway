@@ -1,5 +1,7 @@
 package dev.payflow.payment.processor;
 
+import java.util.UUID;
+
 import dev.payflow.payment.domain.Money;
 import dev.payflow.payment.domain.PaymentMethod;
 
@@ -17,5 +19,6 @@ public interface PaymentMethodProcessor {
     /** Masked form safe to store and log, e.g. {@code tok_****4242}. */
     String mask(String source);
 
-    BankResponse authorize(String source, Money amount);
+    /** {@code reference} is our payment id; see {@link BankConnector}. */
+    BankResponse authorize(UUID reference, String source, Money amount);
 }
