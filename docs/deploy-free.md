@@ -33,6 +33,15 @@ kubectl -n payflow get pods -w
 
 Make the GHCR package public (GitHub → Packages → package settings), or add an image pull secret.
 
+Onboard a merchant. The admin API is not on the ingress, so reach it through a port-forward:
+
+```bash
+kubectl -n payflow port-forward svc/payment-service 8080:8080 &
+curl -s localhost:8080/admin/merchants -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"Demo store"}'
+# The response contains apiKey.key (sk_…). It is shown once; store it in the merchant's secrets.
+```
+
 ## 4. Expose through Cloudflare Tunnel
 
 1. Add a domain to Cloudflare (free plan), or use a free subdomain service.

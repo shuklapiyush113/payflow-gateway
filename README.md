@@ -10,6 +10,7 @@ LLM dispute assistant. Built to run on free infrastructure (k3s on an Oracle Alw
 |---|---|
 | Card, UPI and wallet payments | Strategy per method, chosen by a registry (factory) |
 | Payment lifecycle | Explicit state machine: `CREATED → AUTHORIZED → CAPTURED → PARTIALLY_REFUNDED → REFUNDED`, plus `PENDING`, `VOIDED`, `DECLINED`, `FAILED` |
+| Merchant authentication | API keys (`Authorization: Bearer sk_…`) via a Spring Security filter; only SHA-256 hashes stored; several keys per merchant for rotation; revocation; admin API for onboarding kept off the public ingress |
 | Safe retries | `Idempotency-Key` header; atomic claim with `INSERT … ON CONFLICT DO NOTHING`; replays return the stored response; the key is also unique on the payment, so a crash cannot lead to a second charge |
 | Lost bank answers | A bank timeout leaves the payment `PENDING` (`202`); a reconciliation job asks the bank and settles it, safe across replicas (`SKIP LOCKED` plus a lease) |
 | No lost or double-counted money | Double-entry ledger; every journal balances; entries are append-only |
@@ -19,8 +20,8 @@ LLM dispute assistant. Built to run on free infrastructure (k3s on an Oracle Alw
 | Errors | RFC 9457 problem details |
 | Operations | Actuator health probes, Prometheus metrics, graceful shutdown, virtual threads |
 
-36 tests: domain unit tests plus integration tests against real Postgres (Testcontainers),
-including concurrency tests for idempotency, capture and parallel reconcilers.
+42 tests: domain unit tests plus integration tests against real Postgres (Testcontainers),
+including concurrency tests for idempotency, capture and parallel reconcilers, and security tests.
 
 ## Architecture
 
@@ -49,17 +50,22 @@ docker compose up -d --build       # Postgres, Redpanda, Redpanda Console, payme
 ```
 
 ```bash
+# Onboard a merchant with the local admin token from docker-compose.yml; the API key is shown once
+curl -s localhost:8080/admin/merchants -H 'Authorization: Bearer local-dev-admin-token-0123456789abcdef' \
+  -H 'Content-Type: application/json' -d '{"name":"Demo store"}'
+KEY=sk_...   # apiKey.key from the response
+
 # Create and capture a payment
 curl -s localhost:8080/v1/payments \
-  -H 'X-Merchant-Id: m_demo' -H 'Idempotency-Key: order-1001' -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $KEY" -H 'Idempotency-Key: order-1001' -H 'Content-Type: application/json' \
   -d '{"amountMinor":149900,"currency":"INR","method":"UPI","source":"alice@okbank","capture":true}'
 
 # Send the same request again: same payment, header Idempotent-Replayed: true, no second charge
 
 # Partial refund, then balances
-curl -s localhost:8080/v1/payments/<id>/refunds -H 'X-Merchant-Id: m_demo' \
+curl -s localhost:8080/v1/payments/<id>/refunds -H "Authorization: Bearer $KEY" \
   -H 'Idempotency-Key: refund-1001-a' -H 'Content-Type: application/json' -d '{"amountMinor":49900}'
-curl -s localhost:8080/v1/balances -H 'X-Merchant-Id: m_demo'
+curl -s localhost:8080/v1/balances -H "Authorization: Bearer $KEY"
 ```
 
 Events are visible in Redpanda Console at http://localhost:8081.
@@ -77,6 +83,10 @@ outage, `timeout` is approved by the bank but the answer is lost, and `lost` nev
 | `POST /v1/payments/{id}/refunds` | Full or partial refund |
 | `GET /v1/payments/{id}` | Read a payment |
 | `GET /v1/balances` | Merchant ledger balances |
+| `POST /admin/merchants` | Onboard a merchant; returns its first API key (admin token) |
+| `POST /admin/merchants/{id}/api-keys` | Issue another key, for rotation (admin token) |
+| `GET /admin/merchants/{id}/api-keys` | List key prefixes and revocation status (admin token) |
+| `DELETE /admin/api-keys/{keyId}` | Revoke a key (admin token) |
 
 ## Deploy for free
 
@@ -89,7 +99,8 @@ multi-arch (amd64 + arm64) image to GHCR on every push to `main`.
 1. ~~Payments, state machine, idempotency, ledger, outbox, CI, k3s manifests~~
 2. Step 2, in progress:
    - ~~Reconciliation for payments stuck in `CREATED` or `PENDING`~~
-   - API gateway (Spring Cloud Gateway): API-key auth, Redis token-bucket rate limiting
+   - ~~API-key authentication (merchant id comes from the key, not a header)~~
+   - API gateway (Spring Cloud Gateway): Redis token-bucket rate limiting
    - Notification service consuming events with dedupe; signed merchant webhooks with retry and DLQ
    - Settlement batch job
 3. Risk service: chain of checks (velocity in Redis, blocklist, ML model); XGBoost trained on synthetic

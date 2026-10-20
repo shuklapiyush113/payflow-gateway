@@ -51,6 +51,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/payflow
       EVENT_PUBLISHER: kafka
       KAFKA_BOOTSTRAP: redpanda:9092
+      # Local-only admin token for /admin/** (onboarding merchants). Real deployments use the k8s Secret.
+      ADMIN_TOKEN: local-dev-admin-token-0123456789abcdef
     ports: ["8080:8080"]
     depends_on:
       postgres: {condition: service_healthy}
