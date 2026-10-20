@@ -15,3 +15,7 @@ follow: [verify](.claude/skills/verify/SKILL.md), [smoke-test](.claude/skills/sm
 - State change, ledger journal and outbox event must commit in one transaction; never call the bank
   inside a transaction.
 - No secrets in git (`deploy/k8s/secret.yaml` and `.env` are ignored).
+- Git workflow: every feature or fix gets its own branch (`feat/…`, `fix/…`, `docs/…`) and a pull
+  request against `main`; never commit to `main` directly. Conventional commit messages.
+- No AI attribution in commits or pull requests: no `Co-Authored-By` trailer for an assistant and no
+  "generated with" footer.
