@@ -32,6 +32,8 @@ import dev.payflow.payment.TestcontainersConfiguration.RecordingEventPublisher;
 import dev.payflow.payment.domain.PaymentRepository;
 import dev.payflow.payment.ledger.LedgerEntry;
 import dev.payflow.payment.ledger.LedgerEntryRepository;
+import dev.payflow.payment.merchant.MerchantService;
+import dev.payflow.payment.merchant.MerchantService.NewMerchant;
 import dev.payflow.payment.outbox.OutboxRelay;
 import dev.payflow.payment.outbox.OutboxRepository;
 import tools.jackson.databind.JsonNode;
@@ -57,12 +59,18 @@ class PaymentApiIntegrationTest {
     @Autowired
     RecordingEventPublisher publisher;
 
-    /** A fresh merchant per test keeps tests independent without truncating tables. */
+    @Autowired
+    MerchantService merchants;
+
+    /** A fresh merchant and API key per test keeps tests independent without truncating tables. */
     String merchant;
+    String auth;
 
     @BeforeEach
     void newMerchant() {
-        merchant = "m_" + UUID.randomUUID();
+        NewMerchant created = merchants.createMerchant("test merchant");
+        merchant = created.merchantId();
+        auth = "Bearer " + created.apiKey().key();
     }
 
     @Test
@@ -119,7 +127,7 @@ class PaymentApiIntegrationTest {
                 .andExpect(jsonPath("$.status").value("AUTHORIZED"))));
 
         List<Integer> statuses = runConcurrently(6, () -> mvc.perform(post("/v1/payments/{id}/capture", id)
-                        .header("X-Merchant-Id", merchant)
+                        .header("Authorization", auth)
                         .header("Idempotency-Key", newKey()))
                 .andReturn().getResponse().getStatus());
 
@@ -165,17 +173,18 @@ class PaymentApiIntegrationTest {
         createPayment(newKey(), 1_000, "4242424242424242", true)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("invalid_request"));
-        mvc.perform(post("/v1/payments").header("X-Merchant-Id", merchant)
+        mvc.perform(post("/v1/payments").header("Authorization", auth)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest());
-        mvc.perform(get("/v1/payments/{id}", UUID.randomUUID()).header("X-Merchant-Id", merchant))
+        mvc.perform(get("/v1/payments/{id}", UUID.randomUUID()).header("Authorization", auth))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void merchantsCannotSeeEachOthersPayments() throws Exception {
         UUID id = id(body(createPayment(newKey(), 1_000, "tok_visa_4242", true)));
-        mvc.perform(get("/v1/payments/{id}", id).header("X-Merchant-Id", "m_someone_else"))
+        String otherMerchant = "Bearer " + merchants.createMerchant("other").apiKey().key();
+        mvc.perform(get("/v1/payments/{id}", id).header("Authorization", otherMerchant))
                 .andExpect(status().isNotFound());
     }
 
@@ -204,7 +213,7 @@ class PaymentApiIntegrationTest {
         Map<String, Object> request = Map.of("amountMinor", amount, "currency", "INR", "method", method,
                 "source", source, "capture", capture);
         return mvc.perform(post("/v1/payments")
-                .header("X-Merchant-Id", merchant)
+                .header("Authorization", auth)
                 .header("Idempotency-Key", key)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(request)));
@@ -212,14 +221,14 @@ class PaymentApiIntegrationTest {
 
     private ResultActions refund(UUID id, long amount) throws Exception {
         return mvc.perform(post("/v1/payments/{id}/refunds", id)
-                .header("X-Merchant-Id", merchant)
+                .header("Authorization", auth)
                 .header("Idempotency-Key", newKey())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"amountMinor\":" + amount + "}"));
     }
 
     private Map<String, Long> balances() throws Exception {
-        JsonNode rows = body(mvc.perform(get("/v1/balances").header("X-Merchant-Id", merchant)));
+        JsonNode rows = body(mvc.perform(get("/v1/balances").header("Authorization", auth)));
         Map<String, Long> balances = new java.util.HashMap<>();
         rows.forEach(r -> balances.put(r.get("account").asString(), r.get("balanceMinor").asLong()));
         return balances;
