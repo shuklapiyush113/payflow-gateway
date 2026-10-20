@@ -34,7 +34,7 @@ spec:
         runAsUser: 10001
       containers:
         - name: payment-service
-          image: ghcr.io/OWNER/payflow-payment-service:latest
+          image: ghcr.io/shuklapiyush113/payflow-payment-service:latest
           ports: [{name: http, containerPort: 8080}]
           envFrom:
             - configMapRef: {name: payment-service}

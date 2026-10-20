@@ -7,6 +7,6 @@ resources:
   - redpanda.yaml
   - payment-service.yaml
 images:
-  # Replace OWNER with your GitHub user or org (lower case); CI pushes this image.
-  - name: ghcr.io/OWNER/payflow-payment-service
+  # CI pushes this image on every push to main.
+  - name: ghcr.io/shuklapiyush113/payflow-payment-service
     newTag: latest

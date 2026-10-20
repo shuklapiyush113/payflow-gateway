@@ -24,8 +24,7 @@ k3s includes Traefik (ingress) and the `local-path` storage class used by the ma
 ## 3. Deploy
 
 ```bash
-git clone <your repo> && cd payflow
-sed -i 's#ghcr.io/OWNER/#ghcr.io/<your-github-user>/#' deploy/k8s/payment-service.yaml deploy/k8s/kustomization.yaml
+git clone https://github.com/shuklapiyush113/payflow-gateway.git && cd payflow-gateway
 cp deploy/k8s/secret.example.yaml deploy/k8s/secret.yaml   # set a real DB_PASSWORD
 kubectl apply -f deploy/k8s/namespace.yaml -f deploy/k8s/secret.yaml
 kubectl apply -k deploy/k8s
