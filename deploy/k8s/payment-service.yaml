@@ -6,6 +6,7 @@ metadata:
 data:
   EVENT_PUBLISHER: kafka
   KAFKA_BOOTSTRAP: redpanda:9092
+  REDIS_HOST: redis
   DB_POOL_SIZE: "10"
   JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError
 ---

@@ -2,7 +2,9 @@ package dev.payflow.payment.api;
 
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -17,6 +19,7 @@ import dev.payflow.payment.idempotency.IdempotencyKeyReusedException;
 import dev.payflow.payment.merchant.ApiKeyNotFoundException;
 import dev.payflow.payment.merchant.MerchantNotFoundException;
 import dev.payflow.payment.processor.InvalidPaymentSourceException;
+import dev.payflow.payment.ratelimit.RateLimitExceededException;
 
 /** Maps exceptions to RFC 9457 problem details. Spring's own errors (validation, missing headers) are handled by the base class. */
 @RestControllerAdvice
@@ -26,6 +29,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     ProblemDetail unauthorized(AuthenticationException e) {
         return problem(HttpStatus.UNAUTHORIZED, "unauthorized",
                 "missing, unknown or revoked API key; send Authorization: Bearer <key>");
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    ResponseEntity<ProblemDetail> rateLimited(RateLimitExceededException e) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(e.retryAfterSeconds()))
+                .body(problem(HttpStatus.TOO_MANY_REQUESTS, "rate_limited", e.getMessage()));
     }
 
     @ExceptionHandler(AccessDeniedException.class)

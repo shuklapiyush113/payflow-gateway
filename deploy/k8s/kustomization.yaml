@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - postgres.yaml
   - redpanda.yaml
+  - redis.yaml
   - payment-service.yaml
 images:
   # CI pushes this image on every push to main.
