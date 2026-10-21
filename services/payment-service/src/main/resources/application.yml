@@ -14,6 +14,13 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      # Short timeouts: the limiter fails open, so a slow Redis must not slow every request down.
+      timeout: 250ms
+      connect-timeout: 250ms
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     producer:
@@ -35,6 +42,10 @@ management:
         enabled: true
 
 payflow:
+  rate-limit:
+    # Per merchant: bursts of up to `capacity` requests, refilled at `refill-per-second`.
+    capacity: 100
+    refill-per-second: 50
   admin:
     # Bearer token for /admin/** (issuing and revoking API keys). Empty disables the admin API.
     token: ${ADMIN_TOKEN:}

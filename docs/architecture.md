@@ -17,6 +17,7 @@ is likely to ask about this project.
 | `idempotency` | Key claim and replay | Idempotent receiver |
 | `merchant` | Merchants and API keys | Repository with `JdbcClient` |
 | `security` | API-key filter, security chain | Servlet filter, stateless authentication |
+| `ratelimit` | `RateLimiter` port, Redis token bucket, MVC interceptor | Port and adapter, interceptor |
 | `application` | Use cases, transaction boundaries, `PaymentReconciler` | Application service, scheduled job |
 | `api` | Controllers, request/response records, error mapping | DTOs separate from the domain |
 
@@ -170,6 +171,38 @@ header, so any caller could act as any merchant.
   the cache TTL.
 - Payments created before this step belong to merchant ids without a `merchants` row, so there is no
   foreign key from `payments` to `merchants` yet.
+
+## Rate limiting
+
+Each merchant gets a token bucket in Redis: bursts of up to 100 requests, refilled at 50 per second
+(`payflow.rate-limit.*`). Over the limit the API answers `429` with `Retry-After`; every response
+carries `X-RateLimit-Limit` and `X-RateLimit-Remaining`.
+
+- **Token bucket** rather than a fixed window: a fixed window lets a client send twice the limit across
+  a window boundary, and a token bucket allows short bursts while holding the average rate.
+- **Lua script in Redis:** reading the bucket, refilling it and taking a token happen in one atomic
+  script. Doing it as separate `GET` and `SET` calls from Java would let two replicas both see the
+  last token and both spend it. A test fires 20 requests at a 5-token bucket and gets exactly 5 through.
+- **Redis server time** (`TIME` inside the script), not each replica's clock, so clock skew between
+  pods cannot hand out extra tokens.
+- **Per merchant, not per key:** the bucket key is the merchant id, so issuing more API keys does not
+  raise the limit. Limiting runs after authentication; unauthenticated traffic is limited per IP at
+  Cloudflare instead.
+- **Fails open:** if Redis is down or slower than 250 ms, the request is allowed and counted in
+  `payflow.ratelimit.decisions{result="unavailable"}`. Rejecting every payment because the limiter is
+  down would turn a Redis outage into a payments outage; the trade-off is no per-merchant limit for
+  that time. An alert on that counter is the follow-up (observability step).
+  Measured locally with Redis stopped: each request waits for the 250 ms timeout (~260 ms total). A
+  circuit breaker (Resilience4j) that skips Redis for a few seconds after failures would remove that
+  wait; it is not built yet.
+- **No persistence:** buckets refill on their own and expire when idle, so Redis runs without
+  snapshots and with a 64 MB cap.
+- **No separate gateway (yet):** the original plan put rate limiting in Spring Cloud Gateway. Since
+  the merchant is only known after the API key is checked in the service, limiting in the service
+  avoids a second key lookup and another JVM on a free VM. A gateway still makes sense once there are
+  several services to route to.
+- Every merchant has the same limit today; per-merchant tiers would be a column on
+  `merchants` passed into the script.
 
 ## Security notes
 

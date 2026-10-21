@@ -11,6 +11,7 @@ LLM dispute assistant. Built to run on free infrastructure (k3s on an Oracle Alw
 | Card, UPI and wallet payments | Strategy per method, chosen by a registry (factory) |
 | Payment lifecycle | Explicit state machine: `CREATED → AUTHORIZED → CAPTURED → PARTIALLY_REFUNDED → REFUNDED`, plus `PENDING`, `VOIDED`, `DECLINED`, `FAILED` |
 | Merchant authentication | API keys (`Authorization: Bearer sk_…`) via a Spring Security filter; only SHA-256 hashes stored; several keys per merchant for rotation; revocation; admin API for onboarding kept off the public ingress |
+| Rate limiting | Per-merchant token bucket in Redis (atomic Lua script, Redis server clock); `429` with `Retry-After` and `X-RateLimit-*` headers; fails open if Redis is down |
 | Safe retries | `Idempotency-Key` header; atomic claim with `INSERT … ON CONFLICT DO NOTHING`; replays return the stored response; the key is also unique on the payment, so a crash cannot lead to a second charge |
 | Lost bank answers | A bank timeout leaves the payment `PENDING` (`202`); a reconciliation job asks the bank and settles it, safe across replicas (`SKIP LOCKED` plus a lease) |
 | No lost or double-counted money | Double-entry ledger; every journal balances; entries are append-only |
@@ -20,8 +21,8 @@ LLM dispute assistant. Built to run on free infrastructure (k3s on an Oracle Alw
 | Errors | RFC 9457 problem details |
 | Operations | Actuator health probes, Prometheus metrics, graceful shutdown, virtual threads |
 
-42 tests: domain unit tests plus integration tests against real Postgres (Testcontainers),
-including concurrency tests for idempotency, capture and parallel reconcilers, and security tests.
+47 tests: domain unit tests plus integration tests against real Postgres (Testcontainers),
+including concurrency tests for idempotency, capture and parallel reconcilers, security tests, and a test that 20 parallel requests cannot overspend a 5-token bucket.
 
 ## Architecture
 
@@ -46,7 +47,7 @@ Needs Java 21 and Docker.
 
 ```bash
 ./mvnw verify                      # all tests (starts Postgres with Testcontainers)
-docker compose up -d --build       # Postgres, Redpanda, Redpanda Console, payment-service
+docker compose up -d --build       # Postgres, Redis, Redpanda, Redpanda Console, payment-service
 ```
 
 ```bash
@@ -100,7 +101,7 @@ multi-arch (amd64 + arm64) image to GHCR on every push to `main`.
 2. Step 2, in progress:
    - ~~Reconciliation for payments stuck in `CREATED` or `PENDING`~~
    - ~~API-key authentication (merchant id comes from the key, not a header)~~
-   - API gateway (Spring Cloud Gateway): Redis token-bucket rate limiting
+   - ~~Per-merchant rate limiting (Redis token bucket)~~
    - Notification service consuming events with dedupe; signed merchant webhooks with retry and DLQ
    - Settlement batch job
 3. Risk service: chain of checks (velocity in Redis, blocklist, ML model); XGBoost trained on synthetic
